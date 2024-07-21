@@ -1,32 +1,40 @@
 
 
 %{
-#include <string>
+#define _GNU_SOURCE
+#include <search.h>
+#include <stdbool.h>
+#include <string.h>
+#include <malloc.h>
+#include <stdio.h>
 int yyerror(char *s);
-int yyerror(const std::string &s);
 #include <stdint.h>
-#include <memory>
-#include <map>
-#include <set>
-typedef std::variant<std::monostate, std::string, int> var_type;
-typedef std::variant<std::string, uintmax_t> constant_type;
-extern std::map <std::string, var_type>	local;
-extern std::set <std::string>	global;
+typedef struct {
+	bool is_extern;
+	int stack_offset;
+} var_type;
+int yylex(void);
+void insert_var(struct hsearch_data *ns, char *name, var_type var);
+extern struct hsearch_data global;
+extern struct hsearch_data local;
 extern int				current_stack_size;
 extern int				current_label;
-extern std::string			switch_end;
-typedef std::pair<int, int> int_pair;
-std::string constant_to_string(const constant_type &c);
 %}
 
 %right ELSE
 %nonassoc IF
 
-%token AUTO EXTRN SWITCH CASE  WHILE GOTO RETURN
+%token AUTO EXTRN SWITCH CASE WHILE GOTO RETURN
 
-%token <std::string> NAME
-%token <std::string> STRING_LITERAL
-%token <constant_type> CONSTANT
+%union {
+	int integer;
+	struct {int first; int second;} int_pair;
+	char *string;
+}
+
+%token <string> NAME
+%token <string> STRING_LITERAL
+%token <string> CONSTANT
 %left ','
 %right  ':' '?'
 %right '=' RIGHT_OP_ASSIGN LEFT_OP_ASSIGN LE_OP_ASSIGN GE_OP_ASSIGN EQ_OP_ASSIGN NE_OP_ASSIGN AND_ASSIGN NOT_ASSIGN SUB_ASSIGN ADD_ASSIGN MUL_ASSIGN DIV_ASSIGN MOD_ASSIGN LESS_ASSIGN GREAT_ASSIGN OR_ASSIGN
@@ -44,15 +52,21 @@ std::string constant_to_string(const constant_type &c);
 
 %token DEC_OP INC_OP
 
-%type <int> case_statement rvalue_list _label tmp tmp2
-%type <int_pair> ternary
-%type <std::string> section_name sym_name vec_name inc_dec
-
-
-%use_cpp_lex "scanner.yy.hpp"
-%variant
+%type <integer> case_statement rvalue_list _label tmp tmp2
+%type <integer_pair> ternary
+%type <string> sym_name vec_name inc_dec
+%type <scope> fun_definition
 
 %%
+
+wrapper : {
+		puts(".intel_syntax noprefix");
+		puts(".text");
+		hcreate_r(1000, &global);
+} program {
+	hdestroy_r(&global);
+}
+;
 
 program	: definition
 	| program definition
@@ -64,47 +78,57 @@ definition : var_definition
 	;
 
 var_definition	: sym_name ';' {  printf(".long 0\n"); printf(".text\n"); }
-		| sym_name CONSTANT ';' { printf(".long %s\n", constant_to_string($2).c_str()); printf(".text\n"); }
-		| sym_name NAME ';' { printf(".long %s\n", $2.c_str()); printf(".text\n"); }
+		| sym_name CONSTANT ';' { printf(".long %s\n", $2); printf(".text\n"); }
+		| sym_name NAME ';' { printf(".long %s\n", $2); printf(".text\n"); }
 		;
 
-sym_name	: NAME {printf(".section .data\n"); printf("%s:\n", $1.c_str());$$ = $1; global.insert($1);}
+sym_name	: NAME {printf(".section .data\n"); printf("%s:\n", $1);$$ = $1; insert_var(&global, $1, (var_type){.is_extern = true});}
 		;
 
-vec_name	: sym_name { printf(".long %s + 4\n", $1.c_str()); $$ = $1;}
+vec_name	: sym_name { printf(".long %s + 4\n", $1); $$ = $1;}
 		;
 
 vec_definition	: vec_name '[' ']' ';' { printf(".text\n"); }
-		| vec_name '[' CONSTANT ']' ';' { printf(".space %s, 0\n", constant_to_string($3).c_str()); printf(".text\n"); }
+		| vec_name '[' CONSTANT ']' ';' { printf(".space %s, 0\n", $3); printf(".text\n"); }
 		| vec_name '[' ']' ival_list ';' { printf(".text\n"); }
-      		| vec_name '[' CONSTANT ']' ival_list ';' { printf(".if (.-%s) < %s\n", $1.c_str(), constant_to_string($3).c_str()); printf(".space %s-(.-%s) , 0\n", constant_to_string($3).c_str(), $1.c_str()); printf(".endif\n"); printf(".text\n"); }
+      		| vec_name '[' CONSTANT ']' ival_list ';' { printf(".if (.-%s) < %s\n", $1, $3); printf(".space %s-(.-%s) , 0\n", $3, $1); printf(".endif\n"); printf(".text\n"); }
 		;
 
 ival_list	: ival
 		| ival_list ',' ival
 		;
 
-ival		: CONSTANT {printf(".long %s\n", constant_to_string($1).c_str());}
+ival		: CONSTANT {printf(".long %s\n", $1);}
 		| NAME {printf(".long %s\n", $1);}
 		;
 
 fun_definition_name	: NAME {
-				printf(".text\n.globl %s\n%s:\n", ($1).c_str(), ($1).c_str());
-				if ($1 != "main")
-					printf(".long %s + 4\n", ($1).c_str());
+				printf(".text\n.globl %s\n%s:\n", $1, $1);
+				printf(".long %s + 4\n", $1);
 				printf("enter 0, 0\n");
-				global.insert({$1, {}});
+				insert_var(&global, $1, (var_type){.is_extern = true});
 				current_stack_size = 0;
                          }
 			;
 
-fun_definition	: fun_definition_name '('  ')' {current_stack_size = 0;} statement {printf("leave\nret\n");local.clear();}
-		| fun_definition_name '(' parameter_list ')' {current_stack_size = 0;} statement {printf("leave\nret\n");local.clear();}
+fun_definition	: fun_definition_name  '('  {
+			hcreate_r(1000, &(local));
+		} optional_parameter_list ')' {current_stack_size = 0;}  statement {
+			printf("leave\nret\n");
+			hdestroy_r(&(local));
+		}
 		;
 
-parameter_list	: NAME {local.insert({$1, current_stack_size-- - 3});}
-		| parameter_list ',' NAME {local.insert({$3, current_stack_size-- - 3});}
+parameter : NAME {insert_var(&(local), $1, (var_type){.is_extern = false, .stack_offset = current_stack_size-- - 3});}
+		  ;
+
+parameter_list	: parameter
+		| parameter_list ',' parameter
 		;
+
+optional_parameter_list : parameter_list
+						|
+						;
 
 statement	: AUTO auto_var_list ';' statement
 		| EXTRN extrn_var_list ';' statement
@@ -123,7 +147,7 @@ statement	: AUTO auto_var_list ';' statement
 
 case_statement: CASE CONSTANT ':' _label
 		{
-			printf("cmp eax %d\n", $2);
+			printf("cmp eax, %s\n", $2);
 			printf("jne .L%d\n", $4);
 		} statement {
 			printf(".L%d:", $4);
@@ -135,7 +159,7 @@ _label		: {$$ = current_label++;}
 
 _if_goto	: {
 			printf("cmp eax, 0\n");
-			printf("je .L%d\n", $<int>0);
+			printf("je .L%d\n", $<integer>0);
 		}
 		;
 
@@ -164,22 +188,22 @@ auto_var_list	: name_init
 		| auto_var_list ',' name_init
 		;
 
-name_init	: NAME {local.insert({$1, current_stack_size++});printf("push  0\n");} /*todo check duplicate*/
-		| NAME CONSTANT {local.insert({$1, current_stack_size++});printf("push  %s\n", constant_to_string($2).c_str());}
+name_init	: NAME {insert_var(&(local), $1, (var_type){.is_extern = false, .stack_offset = current_stack_size++});printf("push  0\n");} /*todo check duplicate*/
+		| NAME CONSTANT {insert_var(&(local), $1, (var_type){.is_extern = false, .stack_offset = current_stack_size++});printf("push  %s\n", $2);}
 		;
 
-extrn_var_list	: NAME {local.insert({$1, {}});}
-		| extrn_var_list ',' NAME {local.insert({$3, {}});}
+extrn_var_list	: NAME {insert_var(&(local), $1, (var_type){.is_extern = true});}
+		| extrn_var_list ',' NAME {insert_var(&(local), $3, (var_type){.is_extern = true});}
 		;
 
 rvalue		: '(' rvalue ')'
 		| lvalue {printf("mov eax, [eax]\n");}
-		| CONSTANT {printf("mov eax, %s\n", constant_to_string($1).c_str());}
+		| CONSTANT {printf("mov eax, %s\n", $1);}
 		| assignment_expression
 		| inc_dec lvalue %prec PRE_INC_DEC
 		{
 			printf("mov ebx, [eax]\n");
-			printf("%s ebx, 1\n", $1.c_str());
+			printf("%s ebx, 1\n", $1);
 			printf("mov [eax], ebx\n");
 			printf("mov eax, ebx\n");
 		}
@@ -187,7 +211,7 @@ rvalue		: '(' rvalue ')'
 		{
 			printf("mov ebx, [eax]\n");
 			printf("mov ecx, ebx\n");
-			printf("%s ebx, 1\n", $2.c_str());
+			printf("%s ebx, 1\n", $2);
 			printf("mov [eax], ebx\n");
 			printf("mov eax, ecx\n");
 		}
@@ -270,21 +294,20 @@ binary_expression	: rvalue '|' _push_eax rvalue {printf("pop ebx\n"); printf("or
 
 lvalue		: NAME {
 			var_type tmp;
-			if (local.contains($1))
-				tmp = local[$1];
-			else if (global.contains($1))
-				tmp = std::monostate();
+			ENTRY *ptr;
+			if (hsearch_r((ENTRY){.key = $1}, FIND, &ptr, &(local)))
+				tmp = *(var_type*)(ptr->data);
+			else if (hsearch_r((ENTRY){.key = $1}, FIND, &ptr, &global))
+				tmp.is_extern = true;
 			else
 			{
 				yyerror("unknown variable");
 				YYERROR;
 			}
-			if (std::holds_alternative<std::monostate>(tmp))
-				printf("lea eax, %s\n", $1.c_str());
-			else if (std::holds_alternative<std::string>(tmp))
-				printf("lea eax, %s\n", std::get<std::string>(tmp).c_str());
+			if (tmp.is_extern)
+				printf("lea eax, %s\n", $1);
 			else
-				printf("lea eax, [ebp - %d]\n", (std::get<int>(tmp) + 1) * 4);
+				printf("lea eax, [ebp - %d]\n", (tmp.stack_offset + 1) * 4);
 			}
 		| '*' rvalue {}
 		| rvalue '[' _push_eax rvalue ']' {printf("pop ecx\n"); printf("lea eax, [ecx+(eax*4)]\n");} {}
@@ -293,31 +316,26 @@ lvalue		: NAME {
 %%
 
 #include <stdio.h>
-#include <regex>
 
-std::map <std::string, var_type>	local;
-std::set <std::string>	global;
+struct hsearch_data global;
+struct hsearch_data local;
+
 int				current_stack_size = 0;
 int				current_label = 0;
-std::string			switch_end;
 
 extern char yytext[];
 
 int yyerror(char *s)
 {
-//	return Diagnostic::Error(s, Diagnostic::Error::ERROR).print();
 	return fprintf(stderr, "%s\n", s);
 }
 
-int yyerror(const std::string &s)
-{
-	return yyerror(s.c_str());
-}
-
-std::string constant_to_string(const constant_type &c)
-{
-	if (holds_alternative<std::string>(c))
-		return get<std::string>(c);
-	else
-		return std::to_string(get<uintmax_t>(c));
+void insert_var(struct hsearch_data *ns, char *name, var_type var) {
+	ENTRY entry = {
+		.key = strdup(name),
+		.data = malloc(sizeof(var_type)),
+	};
+	*(var_type *)(entry.data) = var;
+	ENTRY *retval;
+	hsearch_r(entry, ENTER, &retval, ns);
 }

@@ -10,102 +10,104 @@ IS			(u|U|l|L)*
 
 %{
 #include <stdio.h>
-#include <stack>
-#include "parser.def.hpp"
+#include <ctype.h>
+#include "parser.tab.h"
 
 int check_type(char *);
 void count(char *yytext);
 int yywrap();
-int	parse_literal(const std::string &s);
+int	parse_literal(const char *s);
 extern int				current_label;
 void comment();
 %}
 
 %%
 
-\/\*([^*]|\*[^/])*\*\/		count(yytext);
-\/\/.*\n					count(yytext);
+\/\*([^*]|\*[^/])*\*\/		{}
+\/\/.*\n					{}
 
-"auto"			{ count(yytext); return(AUTO); }
-"extrn"			{ count(yytext); return(EXTRN); }
+"auto"			{ return(AUTO); }
+"extrn"			{ return(EXTRN); }
 
-"switch"		{ count(yytext); return(SWITCH); }
-"case"			{ count(yytext); return(CASE); }
+"switch"		{ return(SWITCH); }
+"case"			{ return(CASE); }
 
-"if"			{ count(yytext); return(IF); }
-"else"			{ count(yytext); return(ELSE); }
+"if"			{ return(IF); }
+"else"			{ return(ELSE); }
 
-"while"			{ count(yytext); return(WHILE); }
+"while"			{ return(WHILE); }
 
-"goto"			{ count(yytext); return(GOTO); }
+"goto"			{ return(GOTO); }
 
-"return"		{ count(yytext); return(RETURN); }
+"return"		{ return(RETURN); }
 
-{A}(({A}|{D})*)			{ count(yytext); return(std::pair{NAME, std::string(yytext)}); }
+{A}(({A}|{D})*)			{ yylval.string = strdup(yytext); return NAME; }
 
-{D}+				{ count(yytext); return std::pair{CONSTANT, constant_type(uintmax_t(std::stoull(yytext)))}; }
-'(\\.|[^\\'])+'		{ count(yytext); return std::pair{CONSTANT, constant_type(uintmax_t(parse_literal(yytext)))};}
+{D}+|'(\\.|[^\\'])+'				{ yylval.string = strdup(yytext); return CONSTANT; }
+
 \"([^\"\*]|\*n|\*\"|\*\*)*\"	{
-		count(yytext);
+		
 		printf(".section .rodata\n");
 		printf(".LC%d:\n", current_label);
 		printf(".long .LC%d+4\n", current_label);
 		printf(".string %s\n", yytext);
 		printf(".text\n");
-		return std::pair{CONSTANT, constant_type(std::string(".LC") + std::to_string(current_label++))};
+		asprintf(&yylval.string, ".LC%d", current_label);
+		current_label++;
+		return CONSTANT;
 	}
 
-"++"			{ count(yytext); return(INC_OP); }
-"--"			{ count(yytext); return(DEC_OP); }
+"++"			{ return(INC_OP); }
+"--"			{ return(DEC_OP); }
 
-"=>>"			{ count(yytext); return(RIGHT_OP_ASSIGN); }
-"=<<"			{ count(yytext); return(LEFT_OP_ASSIGN); }
-"==<"			{ count(yytext); return(LE_OP_ASSIGN); }
-"==>"			{ count(yytext); return(GE_OP_ASSIGN); }
-"==="			{ count(yytext); return(EQ_OP_ASSIGN); }
-"=!="			{ count(yytext); return(NE_OP_ASSIGN); }
-"=&"			{ count(yytext); return(AND_ASSIGN); }
-"=-"			{ count(yytext); return(SUB_ASSIGN); }
-"=+"			{ count(yytext); return(ADD_ASSIGN); }
-"=*"			{ count(yytext); return(MUL_ASSIGN); }
-"=/"			{ count(yytext); return(DIV_ASSIGN); }
-"=%"			{ count(yytext); return(MOD_ASSIGN); }
-"=<"			{ count(yytext); return(LESS_ASSIGN); }
-"=>"			{ count(yytext); return(GREAT_ASSIGN); }
-"=|"			{ count(yytext); return(OR_ASSIGN); }
+"=>>"			{ return(RIGHT_OP_ASSIGN); }
+"=<<"			{ return(LEFT_OP_ASSIGN); }
+"==<"			{ return(LE_OP_ASSIGN); }
+"==>"			{ return(GE_OP_ASSIGN); }
+"==="			{ return(EQ_OP_ASSIGN); }
+"=!="			{ return(NE_OP_ASSIGN); }
+"=&"			{ return(AND_ASSIGN); }
+"=-"			{ return(SUB_ASSIGN); }
+"=+"			{ return(ADD_ASSIGN); }
+"=*"			{ return(MUL_ASSIGN); }
+"=/"			{ return(DIV_ASSIGN); }
+"=%"			{ return(MOD_ASSIGN); }
+"=<"			{ return(LESS_ASSIGN); }
+"=>"			{ return(GREAT_ASSIGN); }
+"=|"			{ return(OR_ASSIGN); }
 
-">>"			{ count(yytext); return(RIGHT_OP); }
-"<<"			{ count(yytext); return(LEFT_OP); }
-"=<"			{ count(yytext); return(LE_OP); }
-"=>"			{ count(yytext); return(GE_OP); }
-"=="			{ count(yytext); return(EQ_OP); }
-"!="			{ count(yytext); return(NE_OP); }
-"&"				{ count(yytext); return('&'); }
-"!"				{ count(yytext); return('!'); }
-"-"				{ count(yytext); return('-'); }
-"+"				{ count(yytext); return('+'); }
-"*"				{ count(yytext); return('*'); }
-"/"				{ count(yytext); return('/'); }
-"%"				{ count(yytext); return('%'); }
-"<"				{ count(yytext); return('<'); }
-">"				{ count(yytext); return('>'); }
-"|"				{ count(yytext); return('|'); }
+">>"			{ return(RIGHT_OP); }
+"<<"			{ return(LEFT_OP); }
+"=<"			{ return(LE_OP); }
+"=>"			{ return(GE_OP); }
+"=="			{ return(EQ_OP); }
+"!="			{ return(NE_OP); }
+"&"				{ return('&'); }
+"!"				{ return('!'); }
+"-"				{ return('-'); }
+"+"				{ return('+'); }
+"*"				{ return('*'); }
+"/"				{ return('/'); }
+"%"				{ return('%'); }
+"<"				{ return('<'); }
+">"				{ return('>'); }
+"|"				{ return('|'); }
 
 
-";"				{ count(yytext); return(';'); }
-("{"|"<%")		{ count(yytext); return('{'); }
-("}"|"%>")		{ count(yytext); return('}'); }
-"?"				{ count(yytext); return('?'); }
-":"				{ count(yytext); return(':'); }
-","				{ count(yytext); return(','); }
-"="				{ count(yytext); return('='); }
-"("				{ count(yytext); return('('); }
-")"				{ count(yytext); return(')'); }
-("["|"<:")		{ count(yytext); return('['); }
-("]"|":>")		{ count(yytext); return(']'); }
+";"				{ return(';'); }
+("{"|"<%")		{ return('{'); }
+("}"|"%>")		{ return('}'); }
+"?"				{ return('?'); }
+":"				{ return(':'); }
+","				{ return(','); }
+"="				{ return('='); }
+"("				{ return('('); }
+")"				{ return(')'); }
+("["|"<:")		{ return('['); }
+("]"|":>")		{ return(']'); }
 
-[ \t\v\n\f]		{ count(yytext); }
-.			{ count(yytext); return error; }
+[ \t\v\n\f]		{ }
+.			{ return 256; }
 
 %%
 
@@ -115,48 +117,7 @@ int yywrap()
 }
 
 
-int old_column = 0;
-int column = 0;
-int line = 0;
-std::string	current_line;
-
-void count(char *yytext)
-{
-	int i;
-
-	current_line.append(yytext);
-	while (current_line.find('\n') != std::string::npos && current_line.find('\n') != current_line.size() - 1)
-		current_line.erase(0, current_line.find('\n') + 1);
-	old_column = column;
-	for (i = 0; yytext[i] != '\0'; i++)
-		if (yytext[i] == '\n')
-		{
-			column = 0;
-			line++;
-		}
-		else if (yytext[i] == '\t')
-			column += 8 - (column % 8);
-		else
-			column++;
-}
-
-extern std::shared_ptr<yyLexer> lexer;
-
-void	finish_line()
-{
-	std::stack<char> unput_stack;
-	while (!current_line.ends_with('\n'))
-	{
-		char c = lexer->input();
-		current_line.push_back(c);
-		unput_stack.push(c);
-	}
-	for (;!unput_stack.empty();unput_stack.pop())
-		lexer->unput(unput_stack.top());
-}
-
-
-int	parse_literal(const std::string &s)
+int	parse_literal(const char *s)
 {
 	if (s[0] != '\'')
 		return -1;

@@ -1,22 +1,30 @@
 NAME = B
 
-SRCS =	parser.tab.cpp \
-		scanner.yy.cpp \
-		main.cpp
+RUNTIME = brt0.o
+
+SRCS =	parser.tab.c \
+		scanner.yy.c \
+		main.c
 
 SRCS_DIR = src
 
-DEPENDENCIES = ${SRCS_DIR}/scanner.yy.hpp ${SRCS_DIR}/parser.def.hpp
+DEPENDENCIES = ${SRCS_DIR}/parser.tab.h
 
 OBJS_DIR = .obj
 
 INCLUDE_DIR = srcs
 
-CXXFLAGS = -g3 -std=c++20 -D YYDEBUG
+CFLAGS = -g3 -D YYDEBUG
 
 LDFLAGS =
 
-LEX = ../ft_lex/ft_lex
-YACC = ../ft_yacc/ft_yacc
+all: ${RUNTIME}
+fclean: clean_runtime
 
-include template_cpp.mk
+clean_runtime:
+	rm -f ${RUNTIME}
+
+${RUNTIME}: ${RUNTIME:%.o=%.s}
+	$(CC) -c -m32 $< -o $@
+
+include template.mk

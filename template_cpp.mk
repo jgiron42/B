@@ -41,7 +41,7 @@ ${OBJS_DIR}/%.o: ${SRCS_DIR}/%.cpp
 	$(CXX) $(CXXFLAGS) ${INCLUDE_ARG} -MMD -c $< -o $@
 
 ${SRCS_DIR}/%.yy.cpp ${SRCS_DIR}/%.yy.hpp: ${SRCS_DIR}/%.l
-	$(LEX) -+ -r $(SRCS_DIR) -b $* $<
+	$(LEX) -r $(SRCS_DIR) -b $* $< && mv ${SRCS_DIR}/${*}.yy.c ${SRCS_DIR}/${*}.yy.cpp
 
 ${SRCS_DIR}/%.tab.cpp ${SRCS_DIR}/%.tab.hpp ${SRCS_DIR}/%.def.hpp: ${SRCS_DIR}/%.y
 	$(YACC) -dtv  -+ -r $(SRCS_DIR) -b $* $<
