@@ -19,6 +19,7 @@ extern struct hsearch_data global;
 extern struct hsearch_data local;
 extern int				current_stack_size;
 extern int				current_label;
+extern int				current_switch_label;
 %}
 
 %right ELSE
@@ -52,7 +53,7 @@ extern int				current_label;
 
 %token DEC_OP INC_OP
 
-%type <integer> case_statement rvalue_list _label tmp tmp2
+%type <integer> rvalue_list _label while_condition while_begin switch_statement
 %type <integer_pair> ternary
 %type <string> sym_name vec_name inc_dec
 %type <scope> fun_definition
@@ -132,16 +133,24 @@ optional_parameter_list : parameter_list
 
 statement	: AUTO auto_var_list ';' statement
 		| EXTRN extrn_var_list ';' statement
-		| NAME _label ':' {
-				insert_var(&local, $1, (var_type){.type = LABEL, .value = $2});
-				printf(".L%d:\n", $2);
-				printf(".long .L%d + 4\n", $2);
+		| NAME ':' {
+				ENTRY *ptr;
+				int lbl;
+				if (hsearch_r((ENTRY){.key = $1}, FIND, &ptr, &(local))) {
+					lbl = ((var_type*)ptr->data)->value;
+				} else {
+					lbl = current_label++;
+					insert_var(&local, $1, (var_type){.type = LABEL, .value = lbl});
+				}
+				printf("jmp [.L%d]\n", lbl);
+				printf(".L%d:\n", lbl);
+				printf(".long .L%d + 4\n", lbl);
 			} statement
 		| case_statement
 		| '{' statement_list '}'
 		| if_statement
 		| while_statement
-		| SWITCH rvalue statement
+		| switch_statement
 		| GOTO rvalue ';' {printf("jmp eax\n");}
 		| RETURN ';' {printf("leave\nret\n");}
 		| RETURN '(' rvalue ')' ';' {printf("leave\nret\n");}
@@ -149,14 +158,29 @@ statement	: AUTO auto_var_list ';' statement
 		| rvalue ';'
 		;
 
-case_statement: CASE CONSTANT ':' _label
+switch_statement: SWITCH _label rvalue {
+        	$$ = current_switch_label;
+        	current_switch_label = $2;
+        	printf("jmp .L%d\n", current_switch_label);
+        } statement
 		{
-			printf("cmp eax, %s\n", $2);
-			printf("jne .L%d\n", $4);
-		} statement {
-			printf(".L%d:", $4);
+			printf(".L%d:\n", current_switch_label);
+			current_switch_label = $4;
 		}
+				;
+
+case_statement: CASE CONSTANT ':' _label _label
+		{
+			printf("jmp .L%d\n", $4);
+			printf(".L%d:\n", current_switch_label);
+			printf("cmp eax, %s\n", $2);
+			printf("jne .L%d\n", $5);
+			current_switch_label = $5;
+			printf(".L%d:\n\n", $4);
+		} statement
 		;
+
+
 
 _label		: {$$ = current_label++;}
 		;
@@ -171,16 +195,16 @@ if_statement	: IF '(' rvalue ')' _label _if_goto statement {printf(".L%d:\n", $5
 		| IF '(' rvalue ')' _label _if_goto statement ELSE _label {printf("jmp .L%d\n", $9); printf(".L%d:\n", $5);} statement {printf(".L%d:\n", $9);}
 		;
 
-tmp		: _label {printf(".L%d:\n", $1);}
+while_condition: _label {printf(".L%d:\n", $1); $$ = $1;}
 		;
 
-tmp2		: _label {
+while_begin		: _label {
 				printf("cmp eax, 0\n");
 				printf("je .L%d\n", $1);
                          }
                 ;
 
-while_statement	: WHILE tmp '(' rvalue ')' tmp2 statement
+while_statement	: WHILE while_condition '(' rvalue ')' while_begin statement
                                              {printf("jmp .L%d\n", $2);printf(".L%d:\n", $6);}
 		;
 
@@ -305,8 +329,8 @@ lvalue		: NAME {
 					tmp.type = EXTERN;
 				else
 				{
-					yyerror("unknown variable");
-					YYERROR;
+					tmp = (var_type){.type = LABEL, .value = current_label++};
+					insert_var(&local, $1, tmp);
 				}
 				switch (tmp.type) {
 					case EXTERN:
@@ -333,6 +357,7 @@ struct hsearch_data local;
 
 int				current_stack_size = 0;
 int				current_label = 0;
+int				current_switch_label = -1;
 
 extern char yytext[];
 
