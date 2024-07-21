@@ -10,8 +10,8 @@
 int yyerror(char *s);
 #include <stdint.h>
 typedef struct {
-	bool is_extern;
-	int stack_offset;
+	enum {EXTERN, STACK, LABEL} type;
+	int value;
 } var_type;
 int yylex(void);
 void insert_var(struct hsearch_data *ns, char *name, var_type var);
@@ -82,7 +82,7 @@ var_definition	: sym_name ';' {  printf(".long 0\n"); printf(".text\n"); }
 		| sym_name NAME ';' { printf(".long %s\n", $2); printf(".text\n"); }
 		;
 
-sym_name	: NAME {printf(".section .data\n"); printf("%s:\n", $1);$$ = $1; insert_var(&global, $1, (var_type){.is_extern = true});}
+sym_name	: NAME {printf(".section .data\n"); printf("%s:\n", $1);$$ = $1; insert_var(&global, $1, (var_type){.type = EXTERN});}
 		;
 
 vec_name	: sym_name { printf(".long %s + 4\n", $1); $$ = $1;}
@@ -106,7 +106,7 @@ fun_definition_name	: NAME {
 				printf(".text\n.globl %s\n%s:\n", $1, $1);
 				printf(".long %s + 4\n", $1);
 				printf("enter 0, 0\n");
-				insert_var(&global, $1, (var_type){.is_extern = true});
+				insert_var(&global, $1, (var_type){.type = EXTERN});
 				current_stack_size = 0;
                          }
 			;
@@ -119,7 +119,7 @@ fun_definition	: fun_definition_name  '('  {
 		}
 		;
 
-parameter : NAME {insert_var(&(local), $1, (var_type){.is_extern = false, .stack_offset = current_stack_size-- - 3});}
+parameter : NAME {insert_var(&(local), $1, (var_type){.type = STACK, .value = current_stack_size-- - 3});}
 		  ;
 
 parameter_list	: parameter
@@ -132,7 +132,11 @@ optional_parameter_list : parameter_list
 
 statement	: AUTO auto_var_list ';' statement
 		| EXTRN extrn_var_list ';' statement
-		| NAME ':' {printf(".L%d\n", current_label++);} statement
+		| NAME _label ':' {
+				insert_var(&local, $1, (var_type){.type = LABEL, .value = $2});
+				printf(".L%d:\n", $2);
+				printf(".long .L%d + 4\n", $2);
+			} statement
 		| case_statement
 		| '{' statement_list '}'
 		| if_statement
@@ -188,12 +192,12 @@ auto_var_list	: name_init
 		| auto_var_list ',' name_init
 		;
 
-name_init	: NAME {insert_var(&(local), $1, (var_type){.is_extern = false, .stack_offset = current_stack_size++});printf("push  0\n");} /*todo check duplicate*/
-		| NAME CONSTANT {insert_var(&(local), $1, (var_type){.is_extern = false, .stack_offset = current_stack_size++});printf("push  %s\n", $2);}
+name_init	: NAME {insert_var(&(local), $1, (var_type){.type = STACK, .value = current_stack_size++});printf("push  0\n");} /*todo check duplicate*/
+		| NAME CONSTANT {insert_var(&(local), $1, (var_type){.type = STACK, .value = current_stack_size++});printf("push  %s\n", $2);}
 		;
 
-extrn_var_list	: NAME {insert_var(&(local), $1, (var_type){.is_extern = true});}
-		| extrn_var_list ',' NAME {insert_var(&(local), $3, (var_type){.is_extern = true});}
+extrn_var_list	: NAME {insert_var(&(local), $1, (var_type){.type = EXTERN});}
+		| extrn_var_list ',' NAME {insert_var(&(local), $3, (var_type){.type = EXTERN});}
 		;
 
 rvalue		: '(' rvalue ')'
@@ -293,21 +297,28 @@ binary_expression	: rvalue '|' _push_eax rvalue {printf("pop ebx\n"); printf("or
 			;
 
 lvalue		: NAME {
-			var_type tmp;
-			ENTRY *ptr;
-			if (hsearch_r((ENTRY){.key = $1}, FIND, &ptr, &(local)))
-				tmp = *(var_type*)(ptr->data);
-			else if (hsearch_r((ENTRY){.key = $1}, FIND, &ptr, &global))
-				tmp.is_extern = true;
-			else
-			{
-				yyerror("unknown variable");
-				YYERROR;
-			}
-			if (tmp.is_extern)
-				printf("lea eax, %s\n", $1);
-			else
-				printf("lea eax, [ebp - %d]\n", (tmp.stack_offset + 1) * 4);
+				var_type tmp;
+				ENTRY *ptr;
+				if (hsearch_r((ENTRY){.key = $1}, FIND, &ptr, &(local)))
+					tmp = *(var_type*)(ptr->data);
+				else if (hsearch_r((ENTRY){.key = $1}, FIND, &ptr, &global))
+					tmp.type = EXTERN;
+				else
+				{
+					yyerror("unknown variable");
+					YYERROR;
+				}
+				switch (tmp.type) {
+					case EXTERN:
+					printf("lea eax, %s\n", $1);
+					break;
+					case STACK:
+					printf("lea eax, [ebp - %d]\n", (tmp.value + 1) * 4);
+					break;
+					case LABEL:
+					printf("lea eax, .L%u\n", tmp.value);
+					break;
+				}
 			}
 		| '*' rvalue {}
 		| rvalue '[' _push_eax rvalue ']' {printf("pop ecx\n"); printf("lea eax, [ecx+(eax*4)]\n");} {}
