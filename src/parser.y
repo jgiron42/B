@@ -3,6 +3,7 @@
 %{
 #define _GNU_SOURCE
 #include <search.h>
+#include <assert.h>
 #include <stdbool.h>
 #include <string.h>
 #include <malloc.h>
@@ -10,16 +11,21 @@
 int yyerror(char *s);
 #include <stdint.h>
 typedef struct {
-	enum {EXTERN, STACK, LABEL} type;
+	char *name;
+	enum {EXTERN, STACK, INTERNAL} type;
 	int value;
 } var_type;
 int yylex(void);
-void insert_var(struct hsearch_data *ns, char *name, var_type var);
-extern struct hsearch_data global;
-extern struct hsearch_data local;
-extern int				current_stack_size;
-extern int				current_label;
-extern int				current_switch_label;
+var_type **insert_var(void **ns, char *name, var_type var);
+void put_internals();
+void destroy_namespace(void *ns);
+extern void * global;
+extern void * local;
+extern int	current_stack_size;
+extern int	current_label;
+extern int	current_switch_label;
+extern char	*current_function;
+int	compare(const void *, const void*);
 %}
 
 %right ELSE
@@ -63,9 +69,9 @@ extern int				current_switch_label;
 wrapper : {
 		puts(".intel_syntax noprefix");
 		puts(".text");
-		hcreate_r(1000, &global);
+		global = NULL;
 } program {
-	hdestroy_r(&global);
+destroy_namespace(global);
 }
 ;
 
@@ -79,28 +85,28 @@ definition : var_definition
 	;
 
 var_definition	: sym_name ';' {  printf(".long 0\n"); printf(".text\n"); }
-		| sym_name CONSTANT ';' { printf(".long %s\n", $2); printf(".text\n"); }
-		| sym_name NAME ';' { printf(".long %s\n", $2); printf(".text\n"); }
+		| sym_name CONSTANT ';' { printf(".long %s\n", $2); printf(".text\n"); free($2);}
+		| sym_name NAME ';' { printf(".long %s\n", $2); printf(".text\n"); free($2);}
 		;
 
-sym_name	: NAME {printf(".section .data\n"); printf("%s:\n", $1);$$ = $1; insert_var(&global, $1, (var_type){.type = EXTERN});}
+sym_name	: NAME {printf(".section .data\n"); printf("%s:\n", $1);$$ = $1; insert_var(&global, $1, (var_type){.type = EXTERN});free($1);}
 		;
 
 vec_name	: sym_name { printf(".long %s + 4\n", $1); $$ = $1;}
 		;
 
 vec_definition	: vec_name '[' ']' ';' { printf(".text\n"); }
-		| vec_name '[' CONSTANT ']' ';' { printf(".space %s, 0\n", $3); printf(".text\n"); }
+		| vec_name '[' CONSTANT ']' ';' { printf(".space %s, 0\n", $3); printf(".text\n"); free($3);}
 		| vec_name '[' ']' ival_list ';' { printf(".text\n"); }
-      		| vec_name '[' CONSTANT ']' ival_list ';' { printf(".if (.-%s) < %s\n", $1, $3); printf(".space %s-(.-%s) , 0\n", $3, $1); printf(".endif\n"); printf(".text\n"); }
+      		| vec_name '[' CONSTANT ']' ival_list ';' { printf(".if (.-%s) < %s\n", $1, $3); printf(".space %s-(.-%s) , 0\n", $3, $1); printf(".endif\n"); printf(".text\n"); free($3);}
 		;
 
 ival_list	: ival
 		| ival_list ',' ival
 		;
 
-ival		: CONSTANT {printf(".long %s\n", $1);}
-		| NAME {printf(".long %s\n", $1);}
+ival		: CONSTANT {printf(".long %s\n", $1);free($1);}
+		| NAME {printf(".long %s\n", $1);free($1);}
 		;
 
 fun_definition_name	: NAME {
@@ -109,18 +115,22 @@ fun_definition_name	: NAME {
 				printf("enter 0, 0\n");
 				insert_var(&global, $1, (var_type){.type = EXTERN});
 				current_stack_size = 0;
-                         }
+				current_function = $1;
+                }
 			;
 
 fun_definition	: fun_definition_name  '('  {
-			hcreate_r(1000, &(local));
+			local = NULL;
 		} optional_parameter_list ')' {current_stack_size = 0;}  statement {
 			printf("leave\nret\n");
-			hdestroy_r(&(local));
+			put_internals();
+			destroy_namespace(local);
+			free(current_function);
+			current_function = NULL;
 		}
 		;
 
-parameter : NAME {insert_var(&(local), $1, (var_type){.type = STACK, .value = current_stack_size-- - 3});}
+parameter : NAME {insert_var(&(local), $1, (var_type){.type = STACK, .value = current_stack_size-- - 3});free($1);}
 		  ;
 
 parameter_list	: parameter
@@ -134,19 +144,21 @@ optional_parameter_list : parameter_list
 statement	: AUTO auto_var_list ';' statement
 		| EXTRN extrn_var_list ';' statement
 		| NAME ':' {
-				ENTRY *ptr;
 				int lbl;
-				if (hsearch_r((ENTRY){.key = $1}, FIND, &ptr, &(local))) {
-					lbl = ((var_type*)ptr->data)->value;
+				var_type compare_node = (var_type){.name = $1};
+				var_type **ptr;
+				if (ptr = tfind(&compare_node, &local, &compare)) {
+					(*ptr)->value = 1;
 				} else {
-					lbl = current_label++;
-					insert_var(&local, $1, (var_type){.type = LABEL, .value = lbl});
+					insert_var(&local, $1, (var_type){.type = INTERNAL, .value = 1});
 				}
-				printf("jmp [.L%d]\n", lbl);
-				printf(".L%d:\n", lbl);
-				printf(".long .L%d + 4\n", lbl);
+				printf("jmp [.L.%s.%s]\n", current_function, $1);
+				printf(".L.%s.%s:\n", current_function, $1);
+				printf(".long .L.%s.%s + 4\n", current_function, $1);
+				free($1);
 			} statement
 		| case_statement
+//		| '{' {$<integer>$ = current_stack_size;} statement_list '}' {printf("add esp, %d\n", (current_stack_size - $<integer>2) * 4); current_stack_size = $<integer>2;}
 		| '{' statement_list '}'
 		| if_statement
 		| while_statement
@@ -159,13 +171,13 @@ statement	: AUTO auto_var_list ';' statement
 		;
 
 switch_statement: SWITCH _label rvalue {
-        	$$ = current_switch_label;
+        	$<integer>$ = current_switch_label;
         	current_switch_label = $2;
         	printf("jmp .L%d\n", current_switch_label);
         } statement
 		{
 			printf(".L%d:\n", current_switch_label);
-			current_switch_label = $4;
+			current_switch_label = $<integer>4;
 		}
 				;
 
@@ -177,6 +189,7 @@ case_statement: CASE CONSTANT ':' _label _label
 			printf("jne .L%d\n", $5);
 			current_switch_label = $5;
 			printf(".L%d:\n\n", $4);
+			free($2);
 		} statement
 		;
 
@@ -216,17 +229,30 @@ auto_var_list	: name_init
 		| auto_var_list ',' name_init
 		;
 
-name_init	: NAME {insert_var(&(local), $1, (var_type){.type = STACK, .value = current_stack_size++});printf("push  0\n");} /*todo check duplicate*/
-		| NAME CONSTANT {insert_var(&(local), $1, (var_type){.type = STACK, .value = current_stack_size++});printf("push  %s\n", $2);}
+name_init	: NAME {
+				insert_var(&(local), $1, (var_type){.type = STACK, .value = current_stack_size++});
+				printf("push  0\n");
+				free($1);
+			}
+		| NAME CONSTANT {
+			int vec_size = atoi($2);
+			insert_var(&(local), $1, (var_type){.type = STACK, .value = current_stack_size += 1 + vec_size});
+			printf("mov eax, esp\n");
+			printf("inc eax\n");
+			printf("push eax\n");
+			printf("sub esp, %d\n", vec_size);
+			free($1);
+			free($2);
+		}
 		;
 
-extrn_var_list	: NAME {insert_var(&(local), $1, (var_type){.type = EXTERN});}
-		| extrn_var_list ',' NAME {insert_var(&(local), $3, (var_type){.type = EXTERN});}
+extrn_var_list	: NAME {insert_var(&(local), $1, (var_type){.type = EXTERN}); free($1);}
+		| extrn_var_list ',' NAME {insert_var(&(local), $3, (var_type){.type = EXTERN}); free($3);}
 		;
 
 rvalue		: '(' rvalue ')'
 		| lvalue {printf("mov eax, [eax]\n");}
-		| CONSTANT {printf("mov eax, %s\n", $1);}
+		| CONSTANT {printf("mov eax, %s\n", $1);free($1);}
 		| assignment_expression
 		| inc_dec lvalue %prec PRE_INC_DEC
 		{
@@ -297,7 +323,7 @@ inc_dec		: INC_OP {$$ = "add";}
 		;
 
 unary_expression	: '-' rvalue %prec UMINUS {printf("neg eax\n");}
-			| '!' rvalue {printf("cmp eax 0\n"); printf("sete al\n"); printf("movzx eax al");}
+			| '!' rvalue {printf("cmp eax, 0\n"); printf("sete al\n"); printf("movzx eax, al\n");}
 			;
 
 _push_eax	: {printf("push eax\n");}
@@ -321,28 +347,24 @@ binary_expression	: rvalue '|' _push_eax rvalue {printf("pop ebx\n"); printf("or
 			;
 
 lvalue		: NAME {
-				var_type tmp;
-				ENTRY *ptr;
-				if (hsearch_r((ENTRY){.key = $1}, FIND, &ptr, &(local)))
-					tmp = *(var_type*)(ptr->data);
-				else if (hsearch_r((ENTRY){.key = $1}, FIND, &ptr, &global))
-					tmp.type = EXTERN;
-				else
-				{
-					tmp = (var_type){.type = LABEL, .value = current_label++};
-					insert_var(&local, $1, tmp);
-				}
-				switch (tmp.type) {
+				var_type **tmp;
+				var_type comp_node = (var_type){.name = $1};
+				(tmp = (var_type **)tfind(&comp_node, &local, &compare)) ||
+				(tmp = (var_type **)tfind(&comp_node, &global, &compare)) ||
+				(tmp = insert_var(&local, $1, (var_type){.type = INTERNAL, .value = 0}));
+				assert(tmp);
+				switch ((*tmp)->type) {
 					case EXTERN:
 					printf("lea eax, %s\n", $1);
 					break;
 					case STACK:
-					printf("lea eax, [ebp - %d]\n", (tmp.value + 1) * 4);
+					printf("lea eax, [ebp - %d]\n", ((*tmp)->value + 1) * 4);
 					break;
-					case LABEL:
-					printf("lea eax, .L%u\n", tmp.value);
+					case INTERNAL:
+					printf("lea eax, .L.%s.%s\n", current_function, (*tmp)->name);
 					break;
 				}
+				free($1);
 			}
 		| '*' rvalue {}
 		| rvalue '[' _push_eax rvalue ']' {printf("pop ecx\n"); printf("lea eax, [ecx+(eax*4)]\n");} {}
@@ -352,12 +374,13 @@ lvalue		: NAME {
 
 #include <stdio.h>
 
-struct hsearch_data global;
-struct hsearch_data local;
+void * global;
+void * local;
 
 int				current_stack_size = 0;
 int				current_label = 0;
 int				current_switch_label = -1;
+char			*current_function = NULL;
 
 extern char yytext[];
 
@@ -366,12 +389,38 @@ int yyerror(char *s)
 	return fprintf(stderr, "%s\n", s);
 }
 
-void insert_var(struct hsearch_data *ns, char *name, var_type var) {
-	ENTRY entry = {
-		.key = strdup(name),
-		.data = malloc(sizeof(var_type)),
-	};
-	*(var_type *)(entry.data) = var;
-	ENTRY *retval;
-	hsearch_r(entry, ENTER, &retval, ns);
+var_type **insert_var(void **ns, char *name, var_type var) {
+	var_type *node = malloc(sizeof(var_type));
+	*node = var;
+	node->name = strdup(name);
+	if (tfind(node, ns, &compare)) {
+		// error
+	}
+	return tsearch(node, ns, &compare);
+}
+
+int	compare(const void *l, const void *r) {
+	return strcmp(((var_type*)l)->name, ((var_type*)r)->name);
+}
+
+void visit_variable(const void *nodep, VISIT which, int depth) {
+	if ((which == preorder || which == leaf) && (*(var_type **)nodep)->type == INTERNAL && (*(var_type **)nodep)->value == 0) {
+		printf(".section .data\n");
+		printf(".L.%s.%s:\n", current_function, (*(var_type **)nodep)->name);
+		printf(".long 0\n");
+		printf(".text\n");
+	}
+}
+
+void put_internals() {
+	twalk(local, &visit_variable);
+}
+
+void destroy_variable(void *nodep) {
+	free(((var_type *)nodep)->name);
+	free(nodep);
+}
+
+void destroy_namespace(void *ns) {
+	tdestroy(ns, &destroy_variable);
 }
