@@ -6,6 +6,7 @@ FS			(f|F|l|L)
 IS			(u|U|l|L)*
 
 %{
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <ctype.h>
 #include "parser.tab.h"
