@@ -13,7 +13,7 @@ IS			(u|U|l|L)*
 int check_type(char *);
 void count(char *yytext);
 int yywrap();
-extern int				current_label;
+extern int	current_label;
 void comment();
 %}
 
@@ -37,12 +37,17 @@ void comment();
 
 "return"		{ return(RETURN); }
 
-{A}(({A}|{D})*)			{ yylval.string = strdup(yytext); return NAME; }
+{A}(({A}|{D})*)	{
+		yylval.string = strdup(yytext);
+		return NAME;
+	}
 
-[-+]?{D}+|'(\\.|[^\\'])+'				{ yylval.string = strdup(yytext); return CONSTANT; }
+[-+]?{D}+|'(\\.|[^\\'])+'	{
+		yylval.string = strdup(yytext);
+		return CONSTANT;
+	}
 
 \"([^\"\*]|\*n|\*\"|\*\*)*\"	{
-		
 		printf(".section .rodata\n");
 		printf(".LC%d:\n", current_label);
 		printf(".long .LC%d+4\n", current_label);
@@ -56,26 +61,10 @@ void comment();
 "++"			{ return(INC_OP); }
 "--"			{ return(DEC_OP); }
 
-"=>>"			{ return(RIGHT_OP_ASSIGN); }
-"=<<"			{ return(LEFT_OP_ASSIGN); }
-"==<"			{ return(LE_OP_ASSIGN); }
-"==>"			{ return(GE_OP_ASSIGN); }
-"==="			{ return(EQ_OP_ASSIGN); }
-"=!="			{ return(NE_OP_ASSIGN); }
-"=&"			{ return(AND_ASSIGN); }
-"=-"			{ return(SUB_ASSIGN); }
-"=+"			{ return(ADD_ASSIGN); }
-"=*"			{ return(MUL_ASSIGN); }
-"=/"			{ return(DIV_ASSIGN); }
-"=%"			{ return(MOD_ASSIGN); }
-"=<"			{ return(LESS_ASSIGN); }
-"=>"			{ return(GREAT_ASSIGN); }
-"=|"			{ return(OR_ASSIGN); }
-
 ">>"			{ return(RIGHT_OP); }
 "<<"			{ return(LEFT_OP); }
-"=<"			{ return(LE_OP); }
-"=>"			{ return(GE_OP); }
+"<="			{ return(LE_OP); }
+">="			{ return(GE_OP); }
 "=="			{ return(EQ_OP); }
 "!="			{ return(NE_OP); }
 "&"				{ return('&'); }
@@ -88,7 +77,6 @@ void comment();
 "<"				{ return('<'); }
 ">"				{ return('>'); }
 "|"				{ return('|'); }
-
 
 ";"				{ return(';'); }
 ("{"|"<%")		{ return('{'); }
