@@ -95,13 +95,13 @@ var_definition	: sym_name ';' {
 					free($1);
 				}
 				| sym_name CONSTANT ';' {
-					printf(".long %s\n", $2);
+					printf(".long \"%s\"\n", $2);
 					puts(".text");
 					free($1);
 					free($2);
 				}
 				| sym_name NAME ';' {
-					printf(".long %s\n", $2);
+					printf(".long \"%s\"\n", $2);
 					puts(".text");
 					free($1);
 					free($2);
@@ -117,7 +117,7 @@ sym_name	: NAME {
 			;
 
 vec_name	: sym_name {
-				printf(".long %s + 4\n", $1);
+				printf(".long \"%s\" + 4\n", $1);
 				$$ = $1;
 			}
 			;
@@ -127,7 +127,7 @@ vec_definition	: vec_name '[' ']' ';' {
 					free($1);
 				}
 				| vec_name '[' CONSTANT ']' ';' {
-					printf(".space %s, 0\n", $3);
+					printf(".space \"%s\", 0\n", $3);
 					puts(".text");
 					free($1);
 					free($3);
@@ -137,8 +137,8 @@ vec_definition	: vec_name '[' ']' ';' {
 					free($1);
 				}
 				| vec_name '[' CONSTANT ']' ival_list ';' {
-					printf(".if (.-%s) < %s\n", $1, $3);
-					printf(".space %s-(.-%s) , 0\n", $3, $1);
+					printf(".if (.-\"%s\") < %s\n", $1, $3);
+					printf(".space %s-(.-\"%s\") , 0\n", $3, $1);
 					puts(".endif");
 					puts(".text");
 					free($1);
@@ -155,14 +155,14 @@ ival		: CONSTANT {
 				free($1);
 			}
 			| NAME {
-				printf(".long %s\n", $1);
+				printf(".long \"%s\"\n", $1);
 				free($1);
 			}
 			;
 
 fun_definition_name	: NAME {
 						printf(".text\n.globl %s\n%s:\n", $1, $1);
-						printf(".long %s + 4\n", $1);
+						printf(".long \"%s\" + 4\n", $1);
 						puts("enter 0, 0");
 						insert_var(&global, $1, (var_type){.type = EXTERN});
 						current_stack_size = 0;
@@ -456,7 +456,7 @@ lvalue	: NAME {
 			assert(tmp);
 			switch ((*tmp)->type) {
 			case EXTERN:
-				printf("lea eax, %s\n", $1);
+				printf("lea eax, \"%s\"\n", $1);
 				break;
 			case STACK:
 				printf("lea eax, [ebp - %d]\n", ((*tmp)->value + 1) * 4);
